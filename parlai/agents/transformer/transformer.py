@@ -128,6 +128,12 @@ def add_common_cmdline_args(parser):
         default=False,
         help='Shard the layers across multiple GPUs.',
     )
+    parser.add_argument(
+        '--encoder-bottleneck-size',
+        type=int,
+        default=-1,
+        help='Take first N tokens from encoder.',
+    )
 
 
 class Transformer(Agent):

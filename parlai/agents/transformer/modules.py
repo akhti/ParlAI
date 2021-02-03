@@ -387,6 +387,7 @@ class TransformerEncoder(nn.Module):
         variant='aiayn',
         n_segments=0,
         output_scaling=1.0,
+        bottleneck_size=-1,
     ):
         super(TransformerEncoder, self).__init__()
 
@@ -403,6 +404,7 @@ class TransformerEncoder(nn.Module):
         self.dropout = nn.Dropout(p=self.dropout_frac)
         self.variant = variant
         self.n_segments = n_segments
+        self.bottleneck_size = bottleneck_size
 
         self.n_positions = n_positions
         self.out_dim = embedding_size
@@ -488,6 +490,22 @@ class TransformerEncoder(nn.Module):
         :return (tensor, mask):
             return embedded input and mask
         """
+        # if self.bottleneck_size > 0:
+        #     # Make sure we have at least bottleneck_size tokens.
+        #     if input.shape[1] < self.bottleneck_size:
+        #         old_input = input
+        #         input = input.new_full(
+        #             (len(input), self.bottleneck_size), self.padding_idx
+        #         )
+        #         input[:, : old_input.shape[1]] = old_input
+        #         print(old_input.shape, "-->", input.shape)
+        #     # Bool [batch,seqlen].
+        #     to_fill = (
+        #         torch.arange(input.shape[1], device=input.device) < self.bottleneck_size
+        #     ).unsqueeze(0) & (input == self.padding_idx)
+        #     # We just need to pad with some random token that won't be marked as padding.
+        #     non_padding_idx = 1
+        #     input[to_fill] = non_padding_idx
         mask = input != self.padding_idx
         if positions is None:
             positions = (mask.cumsum(dim=1, dtype=torch.int64) - 1).clamp_(min=0)
@@ -601,6 +619,10 @@ class TransformerEncoder(nn.Module):
 
         # reduce output
         tensor, out_mask = self.reduce_output(tensor, mask)
+        if self.bottleneck_size > 0:
+            tensor = tensor[:, : self.bottleneck_size]
+            if out_mask is not None:
+                out_mask = out_mask[:, : self.bottleneck_size]
         if out_mask is not None:
             return tensor, out_mask
         else:
@@ -1107,6 +1129,7 @@ class TransformerGeneratorModel(TorchGeneratorModel):
             activation=opt['activation'],
             variant=opt['variant'],
             output_scaling=opt['output_scaling'],
+            bottleneck_size=opt["encoder_bottleneck_size"],
         )
 
     @classmethod
