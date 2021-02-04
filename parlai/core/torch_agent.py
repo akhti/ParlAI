@@ -1589,6 +1589,8 @@ class TorchAgent(ABC, Agent):
         imgs = None
         if any('image' in ex for ex in exs):
             imgs = [ex.get('image', None) for ex in exs]
+        
+        games = [ex.get("game") for ex in exs]
 
         return Batch(
             batchsize=len(valid_inds),
@@ -1602,6 +1604,7 @@ class TorchAgent(ABC, Agent):
             candidate_vecs=cand_vecs,
             image=imgs,
             observations=exs,
+            games=games,
         )
 
     def match_batch(self, batch_reply, valid_inds, output=None):
@@ -1863,6 +1866,7 @@ class TorchAgent(ABC, Agent):
 
         This is easily overridable to facilitate transfer of state dicts.
         """
+        state_dict = self.model.encoder.patch_state_dict(state_dict)
         try:
             self.model.load_state_dict(state_dict)
         except RuntimeError as msg:
