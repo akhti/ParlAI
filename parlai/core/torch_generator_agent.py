@@ -23,8 +23,6 @@ from typing import TypeVar, List, Dict, Optional, Tuple, Set, Iterable
 import math
 from operator import attrgetter
 
-from fairdiplomacy import pydipcc
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -620,13 +618,8 @@ class TorchGeneratorAgent(TorchAgent, ABC):
             .expand(batchsize, 2)
             .cuda()
         )
-
-        games = [pydipcc.Game()] * batchsize
         return Batch(
-            text_vec=text_vec,
-            label_vec=label_vec,
-            text_lengths=[maxlen] * batchsize,
-            games=games,
+            text_vec=text_vec, label_vec=label_vec, text_lengths=[maxlen] * batchsize
         )
 
     def _init_cuda_buffer(self, batchsize, maxlen, force=False):

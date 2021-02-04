@@ -181,10 +181,6 @@ class BartAgent(TransformerGeneratorAgent):
             .to(dev)
         )
 
-    def _model_input(self, batch):
-        return (batch.text_vec, None, None, batch.games)
-    
-
     def compute_loss(self, batch, return_output=False):
         """
         Override TGA.compute_loss to ignore start token.

@@ -28,9 +28,6 @@ import torch.nn.functional as F
 from parlai.core.torch_generator_agent import TorchGeneratorModel
 from parlai.utils.misc import warn_once
 from parlai.utils.torch import neginf, PipelineHelper
-from fairdiplomacy.utils.thread_pool_encoding import FeatureEncoder
-from fairdiplomacy import pydipcc
-
 
 try:
     from apex.normalization.fused_layer_norm import FusedLayerNorm as LayerNorm
@@ -474,61 +471,11 @@ class TransformerEncoder(nn.Module):
             )
         self.output_scaling = output_scaling
 
-        self.dipcc_embedding_sizes = dict(
-            x_board_state=35,
-            x_prev_state=35,
-            x_prev_orders=100 * 2,
-            x_season=3,
-            x_in_adj_phase=1,
-        )
-        self.dipcc_encoder = FeatureEncoder()
-        self.dipcc_mappers = nn.ModuleDict(
-            {
-                k: nn.Linear(sz, embedding_size, bias=False)
-                for k, sz in self.dipcc_embedding_sizes.items()
-            }
-        )
-
-    def patch_state_dict(self, state_dict):
-        state_dict = state_dict.copy()
-        for k in self.dipcc_embedding_sizes:
-            full_key = f"encoder.dipcc_mappers.{k}.weight"
-            if full_key not in state_dict:
-                print("Adding", full_key)
-                state_dict[full_key] = self.dipcc_mappers[k].weight.data.detach()
-        return state_dict
-
-    def compute_dipcc_features(self, games):
-        games = [pydipcc.Game.from_json(g) for g in games]
-        features = self.dipcc_encoder.encode_inputs_state_only(games)
-        individual_embeddings = []
-        for name, module in self.dipcc_mappers.items():
-            tensor = features[name].to(device=module.weight.device, dtype=module.weight.dtype)
-            if name == "x_prev_orders":
-                assert tensor.shape[1] == 2, tensor.shape
-                tensor = tensor.view(tensor.shape[0], 1, -1)
-            # print(name, tensor.shape, module.weight.shape)
-            extended = False
-            while len(tensor.shape) != 3:
-                extended = True
-                tensor = tensor.unsqueeze(1)
-            # print(name, tensor.shape, module.weight.shape)
-            tensor = module(tensor)
-            # print(name, tensor.shape, module.weight.shape)
-            if extended:
-                tensor = tensor.expand(tensor.shape[0], 81, tensor.shape[2])
-            # print(name, tensor.shape, module.weight.shape)
-            # print()
-            individual_embeddings.append(tensor)
-        # print([x.shape for x in individual_embeddings])
-        return sum(individual_embeddings)
-
     def forward_embedding(
         self,
         input: torch.LongTensor,
         positions: Optional[torch.LongTensor] = None,
         segments: Optional[torch.LongTensor] = None,
-        games=None,
     ) -> Tuple[torch.Tensor, torch.BoolTensor]:
         """
         Embed tokens prior to feeding into transformer.
@@ -559,25 +506,10 @@ class TransformerEncoder(nn.Module):
         #     # We just need to pad with some random token that won't be marked as padding.
         #     non_padding_idx = 1
         #     input[to_fill] = non_padding_idx
-
-        # FIXME(akhti): hardcoding BART's default on length.
-        MAX_LENGTH = 2048
-
         mask = input != self.padding_idx
-        tensor = self.embeddings(input)
-        if games is not None:
-            state_embedding = self.compute_dipcc_features(games)
-            overflow = max(0, tensor.shape[1] + state_embedding.shape[1] - MAX_LENGTH)
-            if overflow:
-                tensor = tensor[:, overflow:]
-                mask = mask[:, overflow:]
-            print(state_embedding.shape, tensor.shape)
-            tensor = torch.cat([state_embedding, tensor], 1)
-            mask = torch.cat([mask.new_ones((mask.shape[0], 81)), mask], 1)
-            print("2", state_embedding.shape, tensor.shape, mask.shape)
-
         if positions is None:
             positions = (mask.cumsum(dim=1, dtype=torch.int64) - 1).clamp_(min=0)
+        tensor = self.embeddings(input)
         if self.embeddings_scale:
             tensor = tensor * np.sqrt(self.dim)
 
@@ -657,7 +589,6 @@ class TransformerEncoder(nn.Module):
         input: torch.LongTensor,
         positions: Optional[torch.LongTensor] = None,
         segments: Optional[torch.LongTensor] = None,
-        games=None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.BoolTensor]]:
         """
         Forward pass.
@@ -669,9 +600,8 @@ class TransformerEncoder(nn.Module):
         :param LongTensor[batch,seqlen] segments:
             If provided, additionally adds ``segments`` as extra embedding features.
         """
-        assert games is not None
         # embed input
-        tensor, mask = self.forward_embedding(input, positions, segments, games)
+        tensor, mask = self.forward_embedding(input, positions, segments)
 
         if self.variant == 'xlm' or self.variant == 'bart':
             tensor = _normalize(tensor, self.norm_embeddings)
