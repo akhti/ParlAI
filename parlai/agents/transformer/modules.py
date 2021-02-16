@@ -491,38 +491,10 @@ class TransformerEncoder(nn.Module):
             return embedded input and mask
         """
         mask = input != self.padding_idx
-        # if self.bottleneck_size > 0:
-        #     # Make sure we have at least bottleneck_size tokens.
-        #     if input.shape[1] < self.bottleneck_size:
-        #         old_input = input
-        #         input = input.new_full(
-        #             (len(input), self.bottleneck_size), self.padding_idx
-        #         )
-        #         input[:, : old_input.shape[1]] = old_input
-        #         print(old_input.shape, "-->", input.shape)
-        #     # Bool [batch,seqlen].
-        #     to_fill = (
-        #         torch.arange(input.shape[1], device=input.device) < self.bottleneck_size
-        #     ).unsqueeze(0) & (input == self.padding_idx)
-        #     # We just need to pad with some random token that won't be marked as padding.
-        #     non_padding_idx = 1
-        #     input[to_fill] = non_padding_idx
         tensor = self.embeddings(input)
-        # if self.bottleneck_size > 0:
-        #     # FIXME(akhti): hardcoding BART's default on length.
-        #     MAX_LENGTH = 2048
-        #     overflow = max(0, tensor.shape[1] + self.bottleneck_size - MAX_LENGTH)
-        #     if overflow:
-        #         tensor = tensor[:, overflow:]
-        #         mask = mask[:, overflow:]
-        #     tensor = torch.cat(
-        #         [tensor.new_zeros((tensor.shape[0], self.bottleneck_size, tensor.shape[2])), tensor], 1
-        #     )
-        #     mask = torch.cat(
-        #         [mask.new_ones((mask.shape[0], self.bottleneck_size)), mask], 1
-        #     )
         if positions is None:
             positions = (mask.cumsum(dim=1, dtype=torch.int64) - 1).clamp_(min=0)
+        tensor = self.embeddings(input)
         if self.embeddings_scale:
             tensor = tensor * np.sqrt(self.dim)
 
@@ -633,9 +605,6 @@ class TransformerEncoder(nn.Module):
         # reduce output
         tensor, out_mask = self.reduce_output(tensor, mask)
         if self.bottleneck_size > 0:
-            # tensor = tensor[:, : self.bottleneck_size]
-            # if out_mask is not None:
-            #     out_mask = out_mask[:, : self.bottleneck_size]
             tensor, out_mask = take_last(tensor, out_mask, self.bottleneck_size)
         if out_mask is not None:
             return tensor, out_mask
