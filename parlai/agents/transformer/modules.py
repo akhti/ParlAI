@@ -490,6 +490,7 @@ class TransformerEncoder(nn.Module):
         :return (tensor, mask):
             return embedded input and mask
         """
+        mask = input != self.padding_idx
         # if self.bottleneck_size > 0:
         #     # Make sure we have at least bottleneck_size tokens.
         #     if input.shape[1] < self.bottleneck_size:
@@ -506,10 +507,22 @@ class TransformerEncoder(nn.Module):
         #     # We just need to pad with some random token that won't be marked as padding.
         #     non_padding_idx = 1
         #     input[to_fill] = non_padding_idx
-        mask = input != self.padding_idx
+        tensor = self.embeddings(input)
+        # if self.bottleneck_size > 0:
+        #     # FIXME(akhti): hardcoding BART's default on length.
+        #     MAX_LENGTH = 2048
+        #     overflow = max(0, tensor.shape[1] + self.bottleneck_size - MAX_LENGTH)
+        #     if overflow:
+        #         tensor = tensor[:, overflow:]
+        #         mask = mask[:, overflow:]
+        #     tensor = torch.cat(
+        #         [tensor.new_zeros((tensor.shape[0], self.bottleneck_size, tensor.shape[2])), tensor], 1
+        #     )
+        #     mask = torch.cat(
+        #         [mask.new_ones((mask.shape[0], self.bottleneck_size)), mask], 1
+        #     )
         if positions is None:
             positions = (mask.cumsum(dim=1, dtype=torch.int64) - 1).clamp_(min=0)
-        tensor = self.embeddings(input)
         if self.embeddings_scale:
             tensor = tensor * np.sqrt(self.dim)
 
@@ -620,9 +633,10 @@ class TransformerEncoder(nn.Module):
         # reduce output
         tensor, out_mask = self.reduce_output(tensor, mask)
         if self.bottleneck_size > 0:
-            tensor = tensor[:, : self.bottleneck_size]
-            if out_mask is not None:
-                out_mask = out_mask[:, : self.bottleneck_size]
+            # tensor = tensor[:, : self.bottleneck_size]
+            # if out_mask is not None:
+            #     out_mask = out_mask[:, : self.bottleneck_size]
+            tensor, out_mask = take_last(tensor, out_mask, self.bottleneck_size)
         if out_mask is not None:
             return tensor, out_mask
         else:
@@ -643,6 +657,47 @@ class TransformerEncoder(nn.Module):
 
         tensor_out, mask_out = PipelineHelper.join(chunks)
         return tensor_out
+
+
+def take_last(tensor, mask, size):
+    assert mask is not None
+    assert mask.dtype is torch.bool, mask.dtype
+    # Expected: [B, T, hidden].
+    assert len(tensor.shape) == 3, tensor.shape
+    B, T, hidden_size = tensor.shape
+    assert mask.shape == (B, T), (tensor.shape, mask.shape)
+    tensor_flat = tensor.view(B * T, hidden_size)
+    out_tensor_flat = tensor.new_zeros((B * size, hidden_size))
+    # Mask of "last" tokens that we want to preserve.
+    last_tokens_mask = (
+        torch.flip(torch.flip(mask.long(), [1]).cumsum(-1) <= size, [1]) & mask
+    )
+    #     print(last_tokens_mask)
+    #     print(last_tokens_mask.long().cumsum(-1))
+    # Where the chosen vectors should be written. Non-taken vectors are marked with -1.
+    # Values outside last_tokens_mask are garbage.
+    dst_indices = (
+        last_tokens_mask.long().cumsum(-1)
+        + (torch.arange(B, device=mask.device) * size).unsqueeze(1)
+        - 1
+    )
+    #     print(dst_indices)
+    # print(
+    #     out_tensor_flat.shape,
+    #     dst_indices[dst_indices != -1].shape,
+    #     tensor_flat.shape,
+    #     last_tokens_mask.view(-1).shape,
+    #     tensor_flat[last_tokens_mask.view(-1)].shape,
+    # )
+    # torch.save(locals(), "/private/home/yolo/src/dip/fairdiplomacy/debug.pt")
+    out_tensor_flat[dst_indices.view(-1)[last_tokens_mask.view(-1)]] = tensor_flat[
+        last_tokens_mask.view(-1)
+    ]
+    out_tensor = out_tensor_flat.view(B, size, hidden_size)
+    out_mask = torch.arange(size, device=mask.device).unsqueeze(
+        0
+    ) < last_tokens_mask.long().sum(-1, keepdim=True)
+    return out_tensor, out_mask
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -1129,7 +1184,7 @@ class TransformerGeneratorModel(TorchGeneratorModel):
             activation=opt['activation'],
             variant=opt['variant'],
             output_scaling=opt['output_scaling'],
-            bottleneck_size=opt["encoder_bottleneck_size"],
+            bottleneck_size=opt.get("encoder_bottleneck_size", 0),
         )
 
     @classmethod
